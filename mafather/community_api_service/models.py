@@ -4,6 +4,7 @@ from django.utils import timezone
 from api_service.models import User
 
 
+
 class Category(models.Model):
     """카테고리"""
     
@@ -103,7 +104,11 @@ class Post(models.Model):
 
     def update_like_count(self):
         """좋아요 수 업데이트"""
-        self.like_count = self.likes.count()
+        from .models import Like  # 순환 import 방지
+        self.like_count = Like.objects.filter(
+            target_id=self.id,
+            target_type='post'
+        ).count()
         self.save(update_fields=['like_count'])
 
 
@@ -177,7 +182,11 @@ class Comment(models.Model):
 
     def update_like_count(self):
         """좋아요 수 업데이트"""
-        self.like_count = self.likes.count()
+        from .models import Like
+        self.like_count = Like.objects.filter(
+            target_id=self.id,
+            target_type='post'
+        ).count()
         self.save(update_fields=['like_count'])
 
 
@@ -205,6 +214,7 @@ class PostImage(models.Model):
         """소프트 삭제"""
         self.deleted_at = timezone.now()
         self.save()
+
 
 
 class Like(models.Model):
@@ -250,41 +260,46 @@ class Like(models.Model):
         return None
 
     def save(self, *args, **kwargs):
-        with transaction.atomic():
-            super().save(*args, **kwargs)
-            try:
-                target_obj = self.target_object
-                if target_obj:
-                    like_count = Like.objects.filter(
-                        target_id=self.target_id,
-                        target_type=self.target_type
-                    ).count()
-                    if self.target_type == 'post':
-                        target_obj.like_count = like_count
-                        target_obj.save(update_fields=['like_count', 'updated_at'])
-                    elif self.target_type == 'comment':
-                        target_obj.like_count = like_count
-                        target_obj.save(update_fields=['like_count', 'updated_at'])
-            except Exception as e:
-                # 로그 기록
-                print(f"Error updating like count: {str(e)}")
+        # 먼저 저장
+        super().save(*args, **kwargs)
+        
+        # 그다음 카운트 업데이트 (트랜잭션 내에서)
+        try:
+            target_obj = self.target_object
+            if target_obj:
+                like_count = Like.objects.filter(
+                    target_id=self.target_id,
+                    target_type=self.target_type
+                ).count()
+                
+                if self.target_type == 'post':
+                    # Post 모델에 직접 업데이트
+                    Post.objects.filter(id=self.target_id).update(like_count=like_count)
+                elif self.target_type == 'comment':
+                    # Comment 모델에 직접 업데이트
+                    Comment.objects.filter(id=self.target_id).update(like_count=like_count)
+        except Exception as e:
+            # 로그 기록하고 무시 (테스트 환경에서는 print)
+            print(f"Error updating like count in save: {str(e)}")
 
     def delete(self, *args, **kwargs):
-        with transaction.atomic():
-            target_obj = self.target_object
-            super().delete(*args, **kwargs)
-            try:
-                if target_obj:
-                    like_count = Like.objects.filter(
-                        target_id=self.target_id,
-                        target_type=self.target_type
-                    ).count()
-                    if self.target_type == 'post':
-                        target_obj.like_count = like_count
-                        target_obj.save(update_fields=['like_count', 'updated_at'])
-                    elif self.target_type == 'comment':
-                        target_obj.like_count = like_count
-                        target_obj.save(update_fields=['like_count', 'updated_at'])
-            except Exception as e:
-                # 로그 기록
-                print(f"Error updating like count: {str(e)}")
+        target_obj = self.target_object
+        target_id = self.target_id
+        target_type = self.target_type
+        
+        # 먼저 삭제
+        super().delete(*args, **kwargs)
+        
+        # 그다음 카운트 업데이트
+        try:
+            like_count = Like.objects.filter(
+                target_id=target_id,
+                target_type=target_type
+            ).count()
+            
+            if target_type == 'post':
+                Post.objects.filter(id=target_id).update(like_count=like_count)
+            elif target_type == 'comment':
+                Comment.objects.filter(id=target_id).update(like_count=like_count)
+        except Exception as e:
+            print(f"Error updating like count in delete: {str(e)}")

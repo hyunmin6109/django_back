@@ -52,23 +52,22 @@ def like_post(request, post_id):
         
         if existing_like:
             existing_like.delete()
-            post.update_like_count()  # update_like_count 메서드 사용
             return Response({"message": "좋아요가 취소되었습니다."}, status=200)
         
         # 새로운 좋아요 생성
-        Like.objects.create(
+        like = Like.objects.create(
             user=request.user,
             target_id=post_id,
             target_type='post'
         )
-        post.update_like_count()  # update_like_count 메서드 사용
         
         return Response({"message": "좋아요가 등록되었습니다."}, status=201)
         
     except Post.DoesNotExist:
         return Response({"error": "게시글을 찾을 수 없습니다."}, status=404)
     except Exception as e:
-        return Response({"error": str(e)}, status=500)
+        # 디버깅을 위해 구체적인 오류 메시지 반환
+        return Response({"error": f"서버 오류: {str(e)}"}, status=500)
 
 # 게시글 댓글 작성 API
 @api_view(['POST'])
