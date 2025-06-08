@@ -1,5 +1,5 @@
 import uuid
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 from api_service.models import User
 
@@ -151,13 +151,29 @@ class Comment(models.Model):
         self.post.update_comment_count()
 
     def save(self, *args, **kwargs):
-        # 대댓글의 깊이 설정
-        if self.parent:
-            self.depth = 1
-        super().save(*args, **kwargs)
-        # 댓글 저장 시 게시물의 댓글 수 업데이트
-        if not self.deleted_at:
-            self.post.update_comment_count()
+        with transaction.atomic():
+            # 대댓글의 깊이 설정
+            if self.parent:
+                self.depth = 1
+            super().save(*args, **kwargs)
+            # 댓글 저장 시 게시물의 댓글 수 업데이트
+            if not self.deleted_at:
+                self.post.comment_count = Comment.objects.filter(
+                    post=self.post,
+                    deleted_at__isnull=True
+                ).count()
+                self.post.save(update_fields=['comment_count', 'updated_at'])
+
+    def delete(self, *args, **kwargs):
+        with transaction.atomic():
+            post = self.post
+            super().delete(*args, **kwargs)
+            # 댓글 삭제 시 게시물의 댓글 수 업데이트
+            post.comment_count = Comment.objects.filter(
+                post=post,
+                deleted_at__isnull=True
+            ).count()
+            post.save(update_fields=['comment_count', 'updated_at'])
 
     def update_like_count(self):
         """좋아요 수 업데이트"""
@@ -234,15 +250,41 @@ class Like(models.Model):
         return None
 
     def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-        # 좋아요 생성 시 대상 객체의 좋아요 수 업데이트
-        target_obj = self.target_object
-        if target_obj and hasattr(target_obj, 'update_like_count'):
-            target_obj.update_like_count()
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+            try:
+                target_obj = self.target_object
+                if target_obj:
+                    like_count = Like.objects.filter(
+                        target_id=self.target_id,
+                        target_type=self.target_type
+                    ).count()
+                    if self.target_type == 'post':
+                        target_obj.like_count = like_count
+                        target_obj.save(update_fields=['like_count', 'updated_at'])
+                    elif self.target_type == 'comment':
+                        target_obj.like_count = like_count
+                        target_obj.save(update_fields=['like_count', 'updated_at'])
+            except Exception as e:
+                # 로그 기록
+                print(f"Error updating like count: {str(e)}")
 
     def delete(self, *args, **kwargs):
-        target_obj = self.target_object
-        super().delete(*args, **kwargs)
-        # 좋아요 삭제 시 대상 객체의 좋아요 수 업데이트
-        if target_obj and hasattr(target_obj, 'update_like_count'):
-            target_obj.update_like_count()
+        with transaction.atomic():
+            target_obj = self.target_object
+            super().delete(*args, **kwargs)
+            try:
+                if target_obj:
+                    like_count = Like.objects.filter(
+                        target_id=self.target_id,
+                        target_type=self.target_type
+                    ).count()
+                    if self.target_type == 'post':
+                        target_obj.like_count = like_count
+                        target_obj.save(update_fields=['like_count', 'updated_at'])
+                    elif self.target_type == 'comment':
+                        target_obj.like_count = like_count
+                        target_obj.save(update_fields=['like_count', 'updated_at'])
+            except Exception as e:
+                # 로그 기록
+                print(f"Error updating like count: {str(e)}")
