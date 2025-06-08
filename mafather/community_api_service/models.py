@@ -4,7 +4,6 @@ from django.utils import timezone
 from api_service.models import User
 
 
-
 class Category(models.Model):
     """카테고리"""
     
@@ -104,11 +103,12 @@ class Post(models.Model):
 
     def update_like_count(self):
         """좋아요 수 업데이트"""
-        from .models import Like  # 순환 import 방지
-        self.like_count = Like.objects.filter(
+        # 런타임 import로 순환 참조 방지
+        like_count = Like.objects.filter(
             target_id=self.id,
             target_type='post'
         ).count()
+        self.like_count = like_count
         self.save(update_fields=['like_count'])
 
 
@@ -182,11 +182,11 @@ class Comment(models.Model):
 
     def update_like_count(self):
         """좋아요 수 업데이트"""
-        from .models import Like
-        self.like_count = Like.objects.filter(
+        like_count = Like.objects.filter(
             target_id=self.id,
-            target_type='post'
+            target_type='comment'
         ).count()
+        self.like_count = like_count
         self.save(update_fields=['like_count'])
 
 
@@ -214,7 +214,6 @@ class PostImage(models.Model):
         """소프트 삭제"""
         self.deleted_at = timezone.now()
         self.save()
-
 
 
 class Like(models.Model):
@@ -263,27 +262,24 @@ class Like(models.Model):
         # 먼저 저장
         super().save(*args, **kwargs)
         
-        # 그다음 카운트 업데이트 (트랜잭션 내에서)
+        # 그다음 카운트 업데이트 (직접 DB 업데이트로 순환 참조 방지)
         try:
-            target_obj = self.target_object
-            if target_obj:
-                like_count = Like.objects.filter(
-                    target_id=self.target_id,
-                    target_type=self.target_type
-                ).count()
-                
-                if self.target_type == 'post':
-                    # Post 모델에 직접 업데이트
-                    Post.objects.filter(id=self.target_id).update(like_count=like_count)
-                elif self.target_type == 'comment':
-                    # Comment 모델에 직접 업데이트
-                    Comment.objects.filter(id=self.target_id).update(like_count=like_count)
+            like_count = Like.objects.filter(
+                target_id=self.target_id,
+                target_type=self.target_type
+            ).count()
+            
+            if self.target_type == 'post':
+                # Post 모델에 직접 업데이트
+                Post.objects.filter(id=self.target_id).update(like_count=like_count)
+            elif self.target_type == 'comment':
+                # Comment 모델에 직접 업데이트
+                Comment.objects.filter(id=self.target_id).update(like_count=like_count)
         except Exception as e:
             # 로그 기록하고 무시 (테스트 환경에서는 print)
             print(f"Error updating like count in save: {str(e)}")
 
     def delete(self, *args, **kwargs):
-        target_obj = self.target_object
         target_id = self.target_id
         target_type = self.target_type
         
